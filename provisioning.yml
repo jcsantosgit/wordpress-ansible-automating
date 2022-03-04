@@ -1,0 +1,126 @@
+---
+- hosts: bancodados
+  handlers:
+    - name: restart mysql
+      ansible.builtin.service:
+        name: mysql
+        state: restarted
+      become: yes
+
+  tasks:
+    - name: 'Instala pacotes de dependencia do sistema operacional'
+      apt:
+        update_cache: yes
+        name:
+        - mysql-server
+        - python3-mysqldb
+        state: latest
+      become: yes
+
+    - name: 'Criacao do banco de dados'
+      mysql_db:
+        name: wordpress_db
+        login_user: root
+        state: present
+      become: yes
+
+    - name: 'Criando o usuario do banco de dados'
+      mysql_user:
+        name: wordpress_user
+        password: 'wordpress_12345678'
+        priv: 'wordpress_db.*:ALL'
+        state: present
+        host: "{{ item }}"
+      with_items:
+        - 'localhost'
+        - '127.0.0.1'
+        - '172.31.33.163'
+      become: yes
+      
+    - name: 'Copia o arquivo local my.cnf que esta com as devidas configuracoes para o servidor remoto'
+      copy:
+        src: ./my.cnf
+        dest: /etc/mysql/my.cnf
+      become: yes      
+      notify: 
+        - restart mysql
+
+- hosts: aplicacao
+  handlers:
+    - name: restart apache
+      ansible.builtin.service:
+        name: apache2
+        state: restarted
+      become: yes
+  
+  tasks:      
+    - name: 'Instala pacotes de dependencia do sistema operacional'
+      apt:
+        update_cache: yes
+        name:
+        - php
+        - apache2
+        - libapache2-mod-php
+        - php-gd
+        - php-ssh2
+        - php-mysql
+        - firewalld
+        state: latest
+      become: yes
+    
+    - name: 'Permite o trafego na zona publica para o protocolo HTTP service'
+      ansible.posix.firewalld:
+        service: http
+        permanent: yes
+        immediate: yes
+        zone: public
+        state: enabled
+      become: yes
+
+    - name: 'Permite o trafego na zona publica para o protocolo HTTPS service'
+      ansible.posix.firewalld:
+        service: https
+        zone: public
+        permanent: yes
+        immediate: yes
+        state: enabled
+      become: yes
+
+    - name: 'Baixa o arquivo de instalacao do wordpress'
+      get_url:
+        url: 'https://wordpress.org/latest.tar.gz'
+        dest: '/tmp/wordpress.tar.gz'
+
+    - name: 'Descompactar arquivo do wordpress'
+      unarchive:
+        src: '/tmp/wordpress.tar.gz'
+        dest: /var/www/
+        remote_src: yes
+      become: yes
+
+    - name: 'Copia o wp-config-sample.php e o renomea para wp-config.php'
+      copy:
+        src:  /var/www/wordpress/wp-config-sample.php
+        dest: /var/www/wordpress/wp-config.php
+        remote_src: yes
+      become: yes
+
+    - name: 'Configura o wp-config.php com as entradas do banco de dados'
+      replace:
+        path: '/var/www/wordpress/wp-config.php'
+        regexp: "{{ item.regex }}"
+        replace: "{{ item.value }}"
+      with_items:
+        - { regex: 'database_name_here', value: 'wordpress_db' }
+        - { regex: 'username_here', value: 'wordpress_user' }
+        - { regex: 'password_here', value: 'wordpress_12345678' }
+        - { regex: 'localhost', value: 'ec2-15-229-35-196.sa-east-1.compute.amazonaws.com' }
+      become: yes
+
+    - name: 'Copia arquivo 000-default.conf que esta local para o servidor remoto'
+      copy:
+        src:  ./000-default.conf
+        dest: /etc/apache2/sites-available/000-default.conf
+      become: yes
+      notify:
+        - restart apache      
